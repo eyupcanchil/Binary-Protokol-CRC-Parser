@@ -1,77 +1,93 @@
 #include <stdio.h>
-#include <string.h>
+#include <windows.h>
 #include "protocol.h"
 
+// Gelen paketi ekrana yazdırmak için yardımcı fonksiyon
+void PrintPacketInfo(Packet_t *packet) {
+    printf("\n==========================================\n");
+    printf(" [!!!] YENI PAKET BASARIYLA COZULDU [!!!]\n");
+    printf("==========================================\n");
+    printf("  Versiyon : %d\n", packet->version);
+    printf("  Uzunluk  : %d byte\n", packet->length);
+    printf("  Payload  : ");
+    for (int i = 0; i < packet->length; i++) {
+        printf("%02X ", packet->payload[i]);
+    }
+    printf("\n  CRC      : 0x%04X (Dogrulandi)\n", packet->crc);
+    printf("------------------------------------------\n\n");
+}
+
 int main() {
+    printf("=============================================\n");
+    printf("   C PARSER DONANIM SIMULATORU (FAZ 2)       \n");
+    printf("=============================================\n");
+    printf("[*] COM2 portu dinleniyor... (Cikmak icin Ctrl+C)\n\n");
+
+    // COM2 Portunu Aç (Sanal portumuz)
+    HANDLE hComm = CreateFile("\\\\.\\COM2", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    
+    if (hComm == INVALID_HANDLE_VALUE) {
+        printf("[HATA] COM2 portu acilamadi! \n");
+        printf("Lutfen com0com veya HHD Virtual Serial Port kurarak COM1 <-> COM2 baglantisi olusturun.\n");
+        system("pause");
+        return 1;
+    }
+
+    // Baudrate ayarları (115200)
+    DCB dcbSerialParams = {0};
+    dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
+    if (!GetCommState(hComm, &dcbSerialParams)) {
+        printf("[HATA] Port ayarlari alinamadi.\n");
+        CloseHandle(hComm);
+        return 1;
+    }
+    
+    dcbSerialParams.BaudRate = CBR_115200;
+    dcbSerialParams.ByteSize = 8;
+    dcbSerialParams.StopBits = ONESTOPBIT;
+    dcbSerialParams.Parity = NOPARITY;
+    
+    if (!SetCommState(hComm, &dcbSerialParams)) {
+        printf("[HATA] Port ayarlari ayarlanamadi.\n");
+        CloseHandle(hComm);
+        return 1;
+    }
+
+    // Okuma zaman aşımı (Timeout) ayarları
+    COMMTIMEOUTS timeouts = {0};
+    timeouts.ReadIntervalTimeout = MAXDWORD;
+    timeouts.ReadTotalTimeoutConstant = 0;
+    timeouts.ReadTotalTimeoutMultiplier = 0;
+    SetCommTimeouts(hComm, &timeouts);
+
     ParserContext_t parser;
-    Parser_Init(&parser); // Belleği ve state'leri sıfırla
-
-    // --- TEST 1: NORMAL PAKET ---
-    // Neden bu test? En temel haberleşme senaryosunu (sorunsuz durumu) test ediyoruz.
-    printf("[TEST 1] Standart Paket\n");
-    uint8_t test_payload1[] = {0x10, 0x20, 0x30, 0x40};
-    uint8_t tx_buffer[64];
-    
-    // Uygulama veriyi pakete çevirir (SOF, CRC vs. ekler)
-    uint16_t tx_len = Packet_Build(test_payload1, sizeof(test_payload1), 1, tx_buffer, sizeof(tx_buffer));
-    
-    Packet_t rx_packet;
-    bool success = false;
-    
-    // Neden for döngüsü? UART'tan RX kesmesiyle (interrupt) byte'ların TEK TEK 
-    // gelişini simüle ediyoruz. 
-    for (uint16_t i = 0; i < tx_len; i++) {
-        if (Parser_ProcessByte(&parser, tx_buffer[i], &rx_packet)) {
-            success = true; // Sadece EOF geldiğinde ve paket sorunsuzsa true döner.
-            break;
-        }
-    }
-
-    if (success) {
-        printf("  [OK] Paket Basariyla Ayristirildi!\n\n");
-    }
-
-
-    // --- TEST 2: ZORLU SENARYO (BYTE STUFFING) ---
-    // Neden bu test? Payload içine bilerek 0xAA (SOF), 0x7D ve 0x55(EOF) koyduk.
-    // Eğer byte stuffing algoritmamız iyi çalışmasaydı sistem bunu yeni bir paket 
-    // veya paketin sonu zannedip çökecekti.
-    printf("[TEST 2] Icerisinde tehlikeli bytelar olan paket\n");
-    uint8_t test_payload2[] = {0x01, 0xAA, 0x02, 0x7D, 0x03, 0x55};
-    tx_len = Packet_Build(test_payload2, sizeof(test_payload2), 1, tx_buffer, sizeof(tx_buffer));
-
-    Parser_Init(&parser); // State'i sıfırla
-    success = false;
-    for (uint16_t i = 0; i < tx_len; i++) {
-        if (Parser_ProcessByte(&parser, tx_buffer[i], &rx_packet)) {
-            success = true;
-        }
-    }
-    if (success) {
-        printf("  [OK] Stuffed Paket Basariyla Cozuldu! Sistemin kafasi karismadi.\n\n");
-    }
-
-
-    // --- TEST 3: GÜRÜLTÜ / BOZUK VERİ ---
-    // Neden bu test? Elektromanyetik gürültüden dolayı hat üzerinde bir veri değişirse
-    // sistem bunu yutacak mı, yoksa CRC sayesinde fark edip paketi çöpe mi atacak bunu sınıyoruz.
-    printf("[TEST 3] CRC Hata Yakalama Simulasyonu\n");
-    tx_len = Packet_Build(test_payload1, sizeof(test_payload1), 1, tx_buffer, sizeof(tx_buffer));
-    
-    // Kasıtlı olarak paketin 4. indisindeki veriyi (payload'un bir parçası) bozuyoruz
-    tx_buffer[4] = 0x99; 
-
     Parser_Init(&parser);
-    success = false;
-    for (uint16_t i = 0; i < tx_len; i++) {
-        if (Parser_ProcessByte(&parser, tx_buffer[i], &rx_packet)) {
-            success = true;
+    Packet_t rx_packet;
+
+    uint8_t rx_buffer[1];
+    DWORD bytesRead;
+
+    // Sonsuz UART Dinleme Döngüsü
+    while (1) {
+        // Porttan tek 1 byte oku (Non-blocking parser'ımızı test etmek için)
+        if (ReadFile(hComm, rx_buffer, 1, &bytesRead, NULL)) {
+            if (bytesRead > 0) {
+                uint8_t byte = rx_buffer[0];
+                
+                // Durum geçişlerini konsola basarak görelim
+                printf("RX: 0x%02X | State: %d\n", byte, parser.state);
+                
+                // Gelen byte'ı FSM parser'ımıza besliyoruz
+                if (Parser_ProcessByte(&parser, byte, &rx_packet)) {
+                    // Fonksiyon true dönerse, EOF (0x55) gelmiş, CRC tutmuş ve paket hatasız çözülmüş demektir!
+                    PrintPacketInfo(&rx_packet);
+                }
+            }
+        } else {
+            Sleep(1); // CPU'yu %100 kullanmasını engellemek için küçük bekleme
         }
     }
 
-    if (!success) {
-        printf("  [OK] Basarili! Bozuk paket CRC sayesinda tespit edildi ve reddedildi.\n");
-    }
-
+    CloseHandle(hComm);
     return 0;
 }
