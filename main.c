@@ -2,7 +2,6 @@
 #include <windows.h>
 #include "protocol.h"
 
-// UART (Sanal Port) üzerinden Python Arayüzüne metin gönderme fonksiyonu
 void SendStatusToGUI(HANDLE hComm, const char* msg) {
     DWORD bytesWritten;
     WriteFile(hComm, msg, strlen(msg), &bytesWritten, NULL);
@@ -10,7 +9,7 @@ void SendStatusToGUI(HANDLE hComm, const char* msg) {
 
 int main() {
     printf("=============================================\n");
-    printf("   C PARSER DONANIM SIMULATORU (FAZ 3)       \n");
+    printf("   C PARSER DONANIM SIMULATORU (FAZ 3.2)     \n");
     printf("=============================================\n");
     printf("[*] COM2 dinleniyor... Islemleri artik Python Arayuzunden izleyebilirsiniz.\n\n");
 
@@ -49,22 +48,20 @@ int main() {
             if (bytesRead > 0) {
                 uint8_t byte = rx_buffer[0];
                 
-                // İşlemden ÖNCEKİ durumu kaydediyoruz (Hataları yakalamak için)
                 ParserState_t prev_state = parser.state;
                 
-                // FSM Parser'ı çalıştır
                 if (Parser_ProcessByte(&parser, byte, &rx_packet)) {
-                    
-                    // PAKET BAŞARIYLA ÇÖZÜLDÜYSE GUI'YE HABER VER
                     char buf[256];
                     sprintf(buf, "[OK] PAKET COZULDU! Ver: %d | Uzunluk: %d | CRC: 0x%04X\n", 
                             rx_packet.version, rx_packet.length, rx_packet.crc);
                     SendStatusToGUI(hComm, buf);
-
                 } else {
-                    // EĞER PAKET TAMAMLANMADIYSA HATA VAR MI DIYE KONTROL ET
                     if (prev_state == STATE_CRC_LSB && parser.state == STATE_IDLE) {
-                        SendStatusToGUI(hComm, "[HATA] Paket Reddedildi: CRC Uyusmazligi!\n");
+                        char buf[256];
+                        // DÜZELTİLEN SATIR BURASI: rx_packet.crc yerine parser.rx_packet.crc okutuyoruz
+                        sprintf(buf, "[HATA] CRC Uyusmazligi! Python Gonderdi: 0x%04X | C Hesapladi: 0x%04X\n", 
+                                parser.rx_packet.crc, parser.calculated_crc);
+                        SendStatusToGUI(hComm, buf);
                     }
                     else if (prev_state == STATE_EOF && parser.state == STATE_IDLE) {
                         SendStatusToGUI(hComm, "[HATA] Paket Reddedildi: EOF (0x55) Eksik!\n");
