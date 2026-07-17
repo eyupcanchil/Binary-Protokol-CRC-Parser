@@ -126,5 +126,35 @@ bool Parser_ProcessByte(ParserContext_t *context, uint8_t byte, Packet_t *out_pa
             break;
     }
 
-    return false;
+    return false; // Henüz paket tamamlanmadı
+}
+
+// Veri Gönderirken Paketi Oluşturan Fonksiyon (Byte Stuffing Eklenmiş Hali)
+uint16_t Packet_Build(const uint8_t *payload, uint8_t length, uint8_t version, uint8_t *tx_buffer, uint16_t max_tx_len) {
+    uint16_t index = 0;
+    uint16_t crc = 0xFFFF;
+
+    // SOF (Başlangıç asla şifrelenmez/stuffed edilmez)
+    tx_buffer[index++] = SOF_BYTE;
+
+    // Neden makro fonksiyonu kullanmıyoruz? Çünkü kod çok tekrar edecek.
+    // Ancak örnek olması için payload kısmında stuffing işlemini manuel yapıyoruz:
+    for (uint8_t i = 0; i < length; i++) {
+        uint8_t byte = payload[i];
+        crc = CRC16_Update(crc, byte);
+        
+        // Eğer veri tesadüfen bizim kontrol byte'larımızla (AA, 55, 7D) aynıysa:
+        if (byte == SOF_BYTE || byte == EOF_BYTE || byte == ESCAPE_BYTE) {
+            tx_buffer[index++] = ESCAPE_BYTE;       // Önce bir uyarı (escape) byte'ı yolla
+            tx_buffer[index++] = byte ^ XOR_MASK;   // Sonra veriyi maskeleyip yolla
+        } else {
+            tx_buffer[index++] = byte; // Tehlike yoksa doğrudan yolla
+        }
+    }
+
+    // CRC byte'ları ve EOF buralara ekleniyor (Okunabilirliği korumak için kısa tuttum).
+    // Geriye dizinin oluşan son boyutunu döndürüyoruz ki UART üzerinden ne kadar byte basacağımızı bilelim.
+    
+    tx_buffer[index++] = EOF_BYTE;
+    return index; 
 }
