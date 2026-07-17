@@ -119,6 +119,39 @@ class ProtocolDashboard(ctk.CTk):
             hex_str = "10 20 30"
         
         try:
+            # Gelen değerleri 8-bit (maksimum 255) ile sınırlandırıyoruz (& 0xFF)
+            payload = [(int(x, 16) & 0xFF) for x in hex_str.split()]
+        except:
+            self.tx_log("[!] Hatalı hex formatı. Sadece boşluk bırakarak sayı girin.")
+            return
+
+        # Raw data: Version (1) + Length + Payload
+        raw_data = [1, len(payload)] + payload
+        crc = self.calculate_crc(raw_data)
+        
+        packet = [0xAA] + raw_data + [(crc >> 8) & 0xFF, crc & 0xFF] + [0x55]
+
+        if corrupt:
+            if len(packet) > 3:
+                packet[3] ^= 0xFF # Paketin payload kısmındaki bir veriyi bilerek bozuyoruz
+            status = "BOZUK"
+        else:
+            status = "NORMAL"
+
+        packet_bytes = bytes(packet)
+        self.serial_port.write(packet_bytes)
+        
+        hex_output = " ".join([f"{b:02X}" for b in packet_bytes])
+        self.tx_log(f"[{status}] -> {hex_output}")
+        if not self.is_connected:
+            self.tx_log("[!] Lütfen önce porta bağlanın.")
+            return
+
+        hex_str = self.payload_entry.get().strip()
+        if not hex_str:
+            hex_str = "10 20 30"
+        
+        try:
             payload = [int(x, 16) for x in hex_str.split()]
         except:
             self.tx_log("[!] Hatalı hex formatı.")
